@@ -7,6 +7,9 @@ let IO = require("socket.io")(port, {
   },
 });
 
+// define session map
+const sessionMap = new Map();
+
 IO.use((socket, next) => {
   if (socket.handshake.query) {
     let callerId = socket.handshake.query.callerId;
@@ -14,6 +17,8 @@ IO.use((socket, next) => {
     next();
   }
 });
+// Assuming you have a mechanism to store session state
+let activeCalls = {};
 
 IO.on("connection", (socket) => {
   console.log(socket.user, "Connected");
@@ -27,6 +32,23 @@ IO.on("connection", (socket) => {
       callerId: socket.user,
       sdpOffer: sdpOffer,
     });
+
+    // Store the session state for the call
+    activeCalls[socket.user] = activeCalls[socket.user] || {};
+    activeCalls[socket.user][calleeId] = {
+      sdpOffer: sdpOffer,
+    };
+
+    // // add session values to variable
+    // let session = {
+    //   sdpOffer: sdpOffer
+    // }
+
+    // // assign session values to session
+    // sessionMap.set(calleeId, session);
+
+    // console.log('session user ' + calleeId);
+    // console.log('session value' + session);
   });
 
   socket.on("answerCall", (data) => {
@@ -37,6 +59,11 @@ IO.on("connection", (socket) => {
       callee: socket.user,
       sdpAnswer: sdpAnswer,
     });
+
+    // Update session state for the call
+    if (activeCalls[callerId] && activeCalls[callerId][socket.user]) {
+      activeCalls[callerId][socket.user].sdpAnswer = sdpAnswer;
+    }
   });
 
   socket.on("IceCandidate", (data) => {
@@ -49,8 +76,40 @@ IO.on("connection", (socket) => {
     });
   });
 
-  socket.on('pickup_call', (msg) => {
-    socket.broadcast.emit(msg.event, msg.data); // Broadcast the message to all connected clients
-});
+  socket.on("resumeCall", (data) => {
+    let callerId = data.callerId;
+    let calleeId = socket.user;
 
+    if (activeCalls[callerId] && activeCalls[callerId][calleeId]) {
+      let sessionState = activeCalls[callerId][calleeId];
+      IO.emit("callResumed", sessionState);
+    } else {
+      // Handle error: Session state not found
+      IO.emit("resumeCallError", { message: "Session state not found" });
+    }
+  });
+
+  socket.on('onScanCompleted', (data) => {
+    let calleeId = data.calleeId;
+    IO.emit("onConnected", {
+      calleeId: calleeId,
+    });
+  });
+  
+  socket.on('reInitiateCall', (data) => {
+    console.log("reInititeCall");
+    let callerId = data.callerId;
+    IO.emit('reconnect-user-' + callerId, {
+      message: "Please re-initiate monitoring"
+    });
+
+  });
+
+  socket.on("disconnect", () => {
+    // Cleanup session state on disconnect
+    if (activeCalls[socket.user]) {
+      // delete session for user which returned sdpoffer
+      delete activeCalls[socket.user];
+    }
+  });
 });
